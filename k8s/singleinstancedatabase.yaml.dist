@@ -1,0 +1,33 @@
+# kubectl create secret generic db-admin-secret --from-literal=oracle_pwd=elcaro --dry-run=client -o yaml
+apiVersion: v1
+data:
+  oracle_pwd: ZWxjYXJv
+kind: Secret
+metadata:
+  creationTimestamp: null
+  name: db-admin-secret
+---
+apiVersion: database.oracle.com/v1alpha1
+kind: SingleInstanceDatabase
+metadata:
+  name: sidb-sample
+  namespace: default
+spec:
+  sid: FREE 
+  edition: free
+  adminPassword:
+    secretName: db-admin-secret
+  charset: AL32UTF8
+  pdbName: FREEPDB1 
+  flashBack: false
+  image:
+    pullFrom: $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$DB_VERSION
+    prebuiltDB: false
+  persistence:
+    size: 100Gi
+    setWritePermissions: true
+    storageClass: "standard"
+    accessMode: "ReadWriteOnce"
+  loadBalancer: true
+
+  replicas: 1
