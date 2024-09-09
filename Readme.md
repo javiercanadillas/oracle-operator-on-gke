@@ -158,3 +158,8 @@ I would recommend you the second option, as it will allow you to understand what
   ```
 
 You should be able to connect to both. If you can't, check the logs of the `oracle-database-operator-controller-manager` pod in the `oracle-database-operator-system` namespace to trouebleshoot any possible issues.
+
+# Relevant links
+
+- [Oracle Database Operator Usecase 01](https://github.com/oracle/oracle-database-operator/blob/main/docs/multitenant/usecase01/README.md)
+- [Oracle Database - Fit for Kubernetes](https://blogs.oracle.com/coretec/post/oracle-database-fit-for-kubernetes)

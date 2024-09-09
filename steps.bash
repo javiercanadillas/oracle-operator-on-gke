@@ -9,6 +9,7 @@
 return 0  2>/dev/null || :
 
 # Script-wide variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source env.bash
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
@@ -64,6 +65,15 @@ _check_prereqs() {
   }
 }
 
+_check_oracle_reg_creds() {
+  [[ $DOCKER_PASSWORD ]] || {
+    echo "DOCKER_PASSWORD is not set. You need to set it with export DOCKER_PASSWORD=<password> before running this script"
+    echo "You need to create an Oracle account before downloading any image from them."
+    echo "Once the account is created, you need to set the username with export DOCKER_USER."
+    exit 1
+  }
+}
+
 _get_db_creds() {
   local display=$1 && shift
   CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
@@ -97,6 +107,7 @@ enable_apis() {
 
 create_cluster() {
   echo "Creating GKE cluster $CLUSTER_NAME..."
+  echo "This process may take a while..."
   gcloud container clusters create "$CLUSTER_NAME"   \
     --location "$REGION" \
     --workload-pool="${PROJECT_ID}.svc.id.goog" \
@@ -181,13 +192,9 @@ create_gar_repo() {
 get_oracle_docker_images() {
   echo "Downloading Oracle Database images..."
   [[ ! -d "docker-images" ]] && git clone "https://github.com/oracle/docker-images.git"
-  echo "Preparing the selected image..."
-  mkdir -p "images"
-  cp -r "docker-images/OracleDatabase/SingleInstance/dockerfiles/$DB_VERSION" "images"
-  mv "images/$DB_VERSION/Containerfile.free" "images/$DB_VERSION/Dockerfile"
 }
 
-build_image() {
+set_building_permissions() {
   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
   SA_NAME="$PROJECT_NUMBER-compute"
 
@@ -204,24 +211,32 @@ build_image() {
     --member serviceAccount:"${SA_NAME}@developer.gserviceaccount.com" \
     --role "roles/$role"
   done
+}
 
-  echo "Building image..."
+build_sidb_image() {
+  echo "Preparing the selected image..."
+  mkdir -p "$SCRIPT_DIR/images"
+  cp -r "$SCRIPT_DIR/docker-images/OracleDatabase/SingleInstance/dockerfiles/$DB_VERSION" "$SCRIPT_DIR/images"
   pushd "images/$DB_VERSION" > /dev/null 2>&1 || exit
-  gcloud builds submit \
-    --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$DB_VERSION" \
-    --region "$REGION"
-    .
+  mv "Containerfile.free" "Dockerfile"
+  echo "Building Single Instance Database image..."
+  echo "This process may take a while..."
+  local remote_tag="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$DB_IMAGE_NAME:$DB_VERSION"
+  gcloud builds submit --tag "$remote_tag" --region "$REGION" .
   popd > /dev/null 2>&1 || exit
 }
 
 create_sidb() {
   echo "Creating Oracle Database..."
+  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64)
+  export db_pass_encoded
   envsubst < k8s/singleinstancedatabase.yaml.dist > "k8s/singleinstancedatabase.yaml"
   kubectl apply -f "k8s/singleinstancedatabase.yaml"
 }
 
 check_sidb() {
   echo "Checking Oracle Database..."
+  echo "This process may take a while..."
   local status
   while [[ "$status" != "Healthy" ]]; do
     status="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.status}")"
@@ -252,7 +267,7 @@ install_sqlplus() {
       popd > /dev/null 2>&1 || exit
       ;;
     *?)
-      echo "Unsupported OS"
+      echo "Unsupported OS. Exiting."
       exit 1
       ;;
   esac
@@ -269,32 +284,195 @@ check_connection() {
   echo "Connecting to the CDB... (press Ctrl-C to exit)"
   case $OSTYPE in
     darwin*)
-      gqlplus "sys/$DB_PASSWORD@$CDB_CONN_STRING" as sysdba
+      sqlplus "sys/$DB_PASSWORD@$CDB_CONN_STRING" as sysdba<<EOF
+quit
+EOF
       ;;
     linux*)
-      usql "oracle://sys:$DB_PASSWORD@$CDB_CONN_STRING"
+      usql "oracle://sys:$DB_PASSWORD@$CDB_CONN_STRING" <<EOF
+quit
+EOF
       ;;
     *?)
-      echo "Unsupported OS"
+      echo "Unsupported OS. Exiting."
       exit 1
       ;;
   esac
   echo "Conecting to the PDB... (press Ctrl-C to exit)"
   case $OSTYPE in
     darwin*)
-      gqlplus "sys/$DB_PASSWORD@$PDB_CONN_STRING" as sysdba
+      sqlplus "sys/$DB_PASSWORD@$PDB_CONN_STRING" AS SYSDBA <<EOF
+quit
+EOF
       ;;
     linux*)
-      usql "oracle://sys:$DB_PASSWORD@$PDB_CONN_STRING"
+      usql "oracle://sys:$DB_PASSWORD@$PDB_CONN_STRING" <<EOF
+quit
+EOF
       ;;
     *?)
-      echo "Unsupported OS"
+      echo "Unsupported OS. Exiting."
       exit 1
       ;;
   esac
 }
 
-all() {
+download_ords_images() {
+  echo "Downloading ORDS images..."
+  pushd "$SCRIPT_DIR" > /dev/null 2>&1 || exit
+  [[ -d "oracle-database-operator" ]] && rm -rf "oracle-database-operator"
+  git clone "https://github.com/oracle/oracle-database-operator"
+  cp -rf "oracle-database-operator/ords" "images"
+  popd > /dev/null 2>&1 || exit
+}
+
+build_jdk_image() {
+  echo "Preparing the $JDK_IMAGE_NAME image for building..."
+  mkdir -p "$SCRIPT_DIR/images"
+  cp -r "$SCRIPT_DIR/docker-images/OracleJava/$JDK_VERSION" "$SCRIPT_DIR/images"
+  pushd "images/$JDK_VERSION" > /dev/null 2>&1 || exit
+  echo "Building Oracle JDK $JDK_VERSION image..."
+  echo "This process may take a while..."
+  local remote_tag="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$JDK_IMAGE_NAME:$JDK_VERSION"
+  gcloud builds submit --tag "$remote_tag" --region "$REGION" .
+  popd > /dev/null 2>&1 || exit
+}
+
+build_ords_image() {
+  echo "Preparing ORDS image for building..."
+  pushd "images/ords" > /dev/null 2>&1 || exit
+  local ar_java_url="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$JDK_IMAGE_NAME:$JDK_VERSION"
+  local sed_expression="s|container-registry.oracle.com/java/jdk:latest|$ar_java_url|g"
+  if [[ "$OS" == "darwin" ]]; then
+    sed -i '' "$sed_expression" Dockerfile
+  else
+    sed -i "$sed_expression" Dockerfile
+  fi
+  echo "Building ORDS image..."
+  echo "This process may take a while..."
+  local ar_ords_url="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$ORDS_IMAGE_NAME:latest"
+  gcloud builds submit -t "$ar_ords_url" --region "$REGION" .
+  popd > /dev/null 2>&1 || exit
+}
+
+prepare_cdb_database() {
+  echo "Preparing CDB database..."
+  _get_db_creds hide
+  if [[ $DB_PASSWORD ]]; then
+    envsubst < "$SCRIPT_DIR/sql/configure_cdb.sql.dist" > "$SCRIPT_DIR/sql/configure_cdb.sql"
+    echo "Modyfing the CDB configuration..."
+    echo "All passwords will be set to $DB_PASSWORD"
+    case $OSTYPE in
+      darwin*)
+        sqlplus "sys/$DB_PASSWORD@$CDB_CONN_STRING" as sysdba < "$SCRIPT_DIR/sql/configure_cdb.sql"
+        ;;
+      linux*)
+        usql "oracle://sys:$DB_PASSWORD@$CDB_CONN_STRING" < "$SCRIPT_DIR/sql/configure_cdb.sql"
+        ;;
+      *?)
+        echo "Unsupported OS"
+        exit 1
+        ;;
+    esac
+  else
+    echo "DB_PASSWORD is not set. You need to set it with export DB_PASSWORD=<password> before running this script"
+    exit 1
+  fi
+}
+
+create_cdb_secrets() {
+  echo "Encoding secrets for CDB..."
+  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64)
+  export db_pass_encoded
+  cdbadmin_user_encoded=$(echo -n C##DBAPI_CDB_ADMIN | base64)
+  export cdbadmin_user_encoded
+  webserver_user_encoded=$(echo -n sql_admin | base64)
+  export webserver_user_encoded
+  envsubst < "$SCRIPT_DIR/k8s/secrets.yaml.dist" > "$SCRIPT_DIR/k8s/secrets.yaml"
+  echo "Creating secrets for CDB..."
+  kubectl apply -f "$SCRIPT_DIR/k8s/secrets.yaml"
+}
+
+create_certificates() {
+  echo "Creating certificates..."
+  command -v openssl &> /dev/null || {
+    echo "openssl could not be found. Exiting."
+    exit 1
+  }
+  mkdir -p "$SCRIPT_DIR/certs"
+  pushd "$SCRIPT_DIR/certs" > /dev/null 2>&1 || exit
+  openssl genrsa -out "ca.key" 2048
+  openssl req -new -x509 -days 365 -key "ca.key" \
+    -subj "/C=US/ST=California/L=SanFrancisco/O=oracle /CN=cdb-dev-ords /CN=localhost  Root CA " \
+    -out "ca.crt"
+  openssl req -newkey rsa:2048 -nodes -keyout "tls.key" \
+    -subj "/C=US/ST=California/L=SanFrancisco/O=oracle /CN=cdb-dev-ords /CN=localhost" \
+    -out "server.csr"
+  echo "subjectAltName=DNS:cdb-dev-ords,DNS:www.example.com" > "extfile.txt"
+  openssl x509 -req -extfile "extfile.txt" \
+    -days 365 \
+    -in server.csr \
+    -CA ca.crt \
+    -CAkey ca.key \
+    -CAcreateserial \
+    -out tls.crt
+  popd > /dev/null 2>&1 || exit
+}
+
+create_cert_secrets() {
+  echo "Creating secrets for certificates..."
+  pushd "$SCRIPT_DIR/certs" > /dev/null 2>&1 || exit
+  kubectl create secret tls db-tls \
+    --key=tls.key \
+    --cert=tls.crt  \
+    -n oracle-database-operator-system
+  kubectl create secret generic db-ca \
+    --from-file=ca.crt \
+    -n oracle-database-operator-system
+  popd > /dev/null 2>&1 || exit
+}
+
+prepare_cdb_yaml() {
+  echo "Preparing CDB YAML..."
+  CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
+  CDB_IP_ADDRESS=$(echo "$CDB_CONN_STRING" | cut -d':' -f1) && export CDB_IP_ADDRESS
+  CDB_PORT=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f1) && export CDB_PORT
+  CDB_NAME=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f2) && export CDB_NAME
+  envsubst < "$SCRIPT_DIR/k8s/cdb.yaml.dist" > "$SCRIPT_DIR/k8s/cdb.yaml"
+}
+
+apply_cdb_yaml() {
+  echo "Applying CDB YAML..."
+  kubectl apply -f "$SCRIPT_DIR/k8s/cdb.yaml"
+}
+
+cleanup_gke() {
+  echo "Cleaning up GKE resources..."
+  gcloud container clusters delete "$CLUSTER_NAME" --region "$REGION" --quiet
+}
+
+cleanup_ar() {
+  echo "Cleaning up Artifact Registry resources..."
+  gcloud artifacts repositories delete "$REPO_NAME" --location "$REGION" --quiet
+}
+
+cleanup_local_data() {
+  echo "Cleaning up local data..."
+  rm -rf "$SCRIPT_DIR/images"
+  rm -rf "$SCRIPT_DIR/docker-images"
+  rm -rf "$SCRIPT_DIR/oracle-database-operator"
+  rm -rf "$SCRIPT_DIR"/k8s/*.yaml
+  rm -rf "$SCRIPT_DIR"/*.sql
+  rm -rf "$SCRIPT_DIR"/certs
+}
+
+full_cleanup() {
+  cleanup_gke
+  cleanup_ar
+  cleanup_local_data
+}
+
+step_create_infra() {
   set_gcp_environment
   enable_apis
   create_cluster
@@ -304,13 +482,31 @@ all() {
   check_cert_manager
   deploy_operator
   check_operator
-  get_oracle_docker_images
   create_gar_repo
-  build_image
+  get_oracle_docker_images
+  set_building_permissions
+}
+
+step_install_sidb() {
+  build_sidb_image
   create_sidb
   check_sidb
   install_sqlplus
   check_connection
+}
+
+step_install_ords() {
+  download_ords_images
+  build_jdk_image
+  build_ords_image
+  prepare_cdb_database
+  create_cdb_secrets
+}
+
+all() {
+  step_create_infra
+  step_install_sidb
+  step_install_ords
 }
 
 main() {
@@ -319,7 +515,7 @@ main() {
     _check_prereqs
     "$1"
   else
-    echo "Function $1 not found"
+    echo "Function \"$1\" not found. You need to provide a valid function name present in the script."
     exit 1
   fi
 }

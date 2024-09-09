@@ -1,3 +1,6 @@
 docker-images/
 images/
 k8s/*.yaml
+sql/*.sql
+certs/
+oracle-database-operator/
