@@ -65,15 +65,6 @@ _check_prereqs() {
   }
 }
 
-_check_oracle_reg_creds() {
-  [[ $DOCKER_PASSWORD ]] || {
-    echo "DOCKER_PASSWORD is not set. You need to set it with export DOCKER_PASSWORD=<password> before running this script"
-    echo "You need to create an Oracle account before downloading any image from them."
-    echo "Once the account is created, you need to set the username with export DOCKER_USER."
-    exit 1
-  }
-}
-
 _get_db_creds() {
   local display=$1 && shift
   CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
@@ -176,7 +167,7 @@ deploy_operator () {
 
 check_operator() {
   echo "Checking Oracle Database Operator..."
-  kubectl get pods --namespace oracle-database-operator-system
+  kubectl get pods --namespace "$OPERATOR_NAMESPACE"
 }
 
 check_sidbs() {
@@ -257,7 +248,6 @@ install_sqlplus() {
       _check_install_tap "InstantClientTap/instantclient"
       _check_install_brew instantclient-basic
       _check_install_brew instantclient-sqlplus
-      _check_install_brew gqlplus
       ;;
     linux*)
       push "$(mktemp -d)" > /dev/null 2>&1 || exit
@@ -342,11 +332,15 @@ build_ords_image() {
   echo "Preparing ORDS image for building..."
   pushd "images/ords" > /dev/null 2>&1 || exit
   local ar_java_url="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$JDK_IMAGE_NAME:$JDK_VERSION"
-  local sed_expression="s|container-registry.oracle.com/java/jdk:latest|$ar_java_url|g"
+  local sed_expression_reg="s|container-registry.oracle.com/java/jdk:latest|$ar_java_url|g"
+  local sed_expression_ords="s|ORDSVERSION=.*|ORDSVERSION=$ORDS_VERSION|g"
+  echo "Patching the Dockerfile to use locally buit JDK image and ORDS version $ORDS_VERSION..."
   if [[ "$OS" == "darwin" ]]; then
-    sed -i '' "$sed_expression" Dockerfile
+    sed -i '' "$sed_expression_reg" Dockerfile
+    sed -i '' "$sed_expression_ords" Dockerfile
   else
-    sed -i "$sed_expression" Dockerfile
+    sed -i "$sed_expression_reg" Dockerfile
+    sed -i "$sed_expression_ords" Dockerfile
   fi
   echo "Building ORDS image..."
   echo "This process may take a while..."
@@ -380,70 +374,147 @@ prepare_cdb_database() {
   fi
 }
 
+create_cdbs_pdbs_namespaces() {
+  echo "Creating namespace for CDB..."
+  local namespaces=("$CDB_NAMESPACE" "$PDB_NAMESPACE")
+  for namespace in "${namespaces[@]}"; do
+    kubectl create namespace "$namespace"
+  done
+}
+
 create_cdb_secrets() {
   echo "Encoding secrets for CDB..."
   db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64)
   export db_pass_encoded
-  cdbadmin_user_encoded=$(echo -n C##DBAPI_CDB_ADMIN | base64)
+  cdbadmin_user_encoded=$(echo -n "$CDB_ADMIN_USER" | base64)
   export cdbadmin_user_encoded
-  webserver_user_encoded=$(echo -n sql_admin | base64)
+  webserver_user_encoded=$(echo -n "$WEBSERVER_USER" | base64)
   export webserver_user_encoded
-  envsubst < "$SCRIPT_DIR/k8s/secrets.yaml.dist" > "$SCRIPT_DIR/k8s/secrets.yaml"
+  envsubst < "$SCRIPT_DIR/k8s/cdb-secrets.yaml.dist" > "$SCRIPT_DIR/k8s/cdb-secrets.yaml"
   echo "Creating secrets for CDB..."
-  kubectl apply -f "$SCRIPT_DIR/k8s/secrets.yaml"
+  kubectl apply -f "$SCRIPT_DIR/k8s/cdb-secrets.yaml"
+}
+
+_setup_certs_vars() {
+  tls_key=tls.key
+  tls_crt=tls.crt
+  ca_key=ca.key
+  ca_crt=ca.crt
+  server_csr=server.csr
+  company=google
+  rest_server=ords
 }
 
 create_certificates() {
   echo "Creating certificates..."
+  _setup_certs_vars
+
   command -v openssl &> /dev/null || {
     echo "openssl could not be found. Exiting."
     exit 1
   }
+  
   mkdir -p "$SCRIPT_DIR/certs"
   pushd "$SCRIPT_DIR/certs" > /dev/null 2>&1 || exit
-  openssl genrsa -out "ca.key" 2048
-  openssl req -new -x509 -days 365 -key "ca.key" \
-    -subj "/C=US/ST=California/L=SanFrancisco/O=oracle /CN=cdb-dev-ords /CN=localhost  Root CA " \
-    -out "ca.crt"
-  openssl req -newkey rsa:2048 -nodes -keyout "tls.key" \
-    -subj "/C=US/ST=California/L=SanFrancisco/O=oracle /CN=cdb-dev-ords /CN=localhost" \
-    -out "server.csr"
-  echo "subjectAltName=DNS:cdb-dev-ords,DNS:www.example.com" > "extfile.txt"
+  openssl genrsa -out "$ca_key" 2048
+  openssl req -new -x509 -days 365 -key "$ca_key" \
+    -subj "/C=US/ST=California/L=SanFrancisco/O=${company}/CN=${company} Root CA" \
+    -out "$ca_crt"
+  openssl req -newkey rsa:2048 -nodes -keyout "$tls_key" \
+    -subj "/C=US/ST=California/L=SanFrancisco/O=${company}/CN=cdb-dev-${rest_server}" \
+    -out "$server_csr"
+  echo "subjectAltName=DNS:cdb-dev-${rest_server},DNS:cdb-dev-${rest_server}.${CDB_NAMESPACE},DNS:cdb-dev-${rest_server}.${CDB_NAMESPACE}.svc,DNS:cdb-dev-${rest_server}.${CDB_NAMESPACE}.svc.cluster,DNS:cdb-dev-${rest_server}.${CDB_NAMESPACE}.svc.cluster.local,DNS:localhost" > "extfile.txt"
   openssl x509 -req -extfile "extfile.txt" \
     -days 365 \
-    -in server.csr \
-    -CA ca.crt \
-    -CAkey ca.key \
+    -in "$server_csr" \
+    -CA "$ca_crt" \
+    -CAkey "$ca_key" \
     -CAcreateserial \
-    -out tls.crt
+    -out "$tls_crt"
   popd > /dev/null 2>&1 || exit
 }
 
 create_cert_secrets() {
   echo "Creating secrets for certificates..."
+  _setup_certs_vars
+  [[ ! -d "$SCRIPT_DIR/certs" ]] && {
+    echo "Certificates directory not found. Exiting."
+    exit 1
+  }
   pushd "$SCRIPT_DIR/certs" > /dev/null 2>&1 || exit
-  kubectl create secret tls db-tls \
-    --key=tls.key \
-    --cert=tls.crt  \
-    -n oracle-database-operator-system
-  kubectl create secret generic db-ca \
-    --from-file=ca.crt \
-    -n oracle-database-operator-system
+  [[ ! -f "$tls_key" || ! -f "$tls_crt" || ! -f "$ca_crt" ]] && {
+    echo "Required certificates not found. Exiting."
+    exit 1
+  }
+  secrets_namespaces=(
+    "$CDB_NAMESPACE"
+    "$PDB_NAMESPACE"
+    "$OPERATOR_NAMESPACE")
+  for namespace in "${secrets_namespaces[@]}"; do
+    kubectl delete secret db-tls -n "$namespace" 2>/dev/null
+    kubectl create secret tls db-tls \
+      --key="$tls_key" \
+      --cert="$tls_crt"  \
+      -n "$namespace"
+    kubectl delete secret db-ca -n "$namespace" 2>/dev/null
+    kubectl create secret generic db-ca \
+      --from-file="$ca_crt" \
+      -n "$namespace"
+  done
   popd > /dev/null 2>&1 || exit
 }
 
-prepare_cdb_yaml() {
-  echo "Preparing CDB YAML..."
+_get_cdb_details() {
   CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
   CDB_IP_ADDRESS=$(echo "$CDB_CONN_STRING" | cut -d':' -f1) && export CDB_IP_ADDRESS
   CDB_PORT=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f1) && export CDB_PORT
   CDB_NAME=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f2) && export CDB_NAME
-  envsubst < "$SCRIPT_DIR/k8s/cdb.yaml.dist" > "$SCRIPT_DIR/k8s/cdb.yaml"
 }
 
-apply_cdb_yaml() {
+create_cdb() {
+  echo "Preparing CDB YAML..."
+  _get_cdb_details
+  envsubst < "$SCRIPT_DIR/k8s/cdb.yaml.dist" > "$SCRIPT_DIR/k8s/cdb.yaml"
   echo "Applying CDB YAML..."
   kubectl apply -f "$SCRIPT_DIR/k8s/cdb.yaml"
+}
+
+check_cdb() {
+  echo "Getting logs from the ORDS pod..."
+  echo "Press Ctrl-C to exit"
+  kubectl logs -f "$(kubectl get pods -n "$CDB_NAMESPACE" | grep ords | cut -d ' ' -f 1)" -n "$CDB_NAMESPACE"
+}
+
+create_pdb_secret() {
+  echo "Preparing PDB secret YAML file..."
+  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64) && export db_pass_encoded
+  sysadmin_user_encoded=$(echo -n "$PDB_SYSADMIN_USER" | base64) && export sysadmin_user_encoded
+  webserver_user_encoded=$(echo -n "$WEBSERVER_USER" | base64) && export webserver_user_encoded
+  envsubst < "$SCRIPT_DIR/k8s/pdb-secrets.yaml.dist" > "$SCRIPT_DIR/k8s/pdb-secrets.yaml"
+  echo "Creating PDB secret..."
+  kubectl delete secret pdb-secret -n "$PDB_NAMESPACE" 2>/dev/null
+  kubectl apply -f "$SCRIPT_DIR/k8s/pdb-secrets.yaml"
+}
+
+create_pdb() {
+  echo "Preparing PDB YAML file..."
+  _get_cdb_details
+  envsubst < "$SCRIPT_DIR/k8s/pdb.yaml.dist" > "$SCRIPT_DIR/k8s/pdb.yaml"
+  echo "Creating PDB..."
+  kubectl apply -f "$SCRIPT_DIR/k8s/pdb.yaml"
+}
+
+check_pdb() {
+  echo "Checking PDB..."
+  kubectl get pdbs -n "$PDB_NAMESPACE" -o=jsonpath='{range .items[*]}
+{"\n==================================================================\n"}
+{"CDB="}{.metadata.labels.cdb}
+{"K8SNAME="}{.metadata.name}
+{"PDBNAME="}{.spec.pdbName}
+{"OPENMODE="}{.status.openMode}
+{"ACTION="}{.status.action}
+{"MSG="}{.status.msg}
+{"\n"}{end}'
 }
 
 cleanup_gke() {
@@ -466,47 +537,73 @@ cleanup_local_data() {
   rm -rf "$SCRIPT_DIR"/certs
 }
 
+_call_and_name_function() {
+  local function_name="$1" && shift
+  echo "Calling function $function_name..."
+  "$function_name"
+}
+
 full_cleanup() {
-  cleanup_gke
-  cleanup_ar
-  cleanup_local_data
+  local function_list=(cleanup_gke
+    cleanup_ar
+    cleanup_local_data)
+  for function in "${function_list[@]}"; do
+    _call_and_name_function "$function"
+  done
 }
 
 step_create_infra() {
-  set_gcp_environment
-  enable_apis
-  create_cluster
-  get_gke_credentials
-  install_cert_manager
-  install_cmctl
-  check_cert_manager
-  deploy_operator
-  check_operator
-  create_gar_repo
-  get_oracle_docker_images
-  set_building_permissions
+  local function_list=(set_gcp_environment
+    enable_apis
+    create_cluster
+    get_gke_credentials
+    install_cert_manager
+    install_cmctl
+    check_cert_manager
+    deploy_operator
+    check_operator
+    create_gar_repo
+    get_oracle_docker_images
+    set_building_permissions)
+  for function in "${function_list[@]}"; do
+    _call_and_name_function "$function"
+  done    
 }
 
 step_install_sidb() {
-  build_sidb_image
-  create_sidb
-  check_sidb
-  install_sqlplus
-  check_connection
+  local function_list=(build_sidb_image
+    create_sidb
+    check_sidb
+    install_sqlplus
+    check_connection)
+  for function in "${function_list[@]}"; do
+    _call_and_name_function "$function"
+  done
 }
 
 step_install_ords() {
-  download_ords_images
-  build_jdk_image
-  build_ords_image
-  prepare_cdb_database
-  create_cdb_secrets
+  local function_list=(download_ords_images
+    build_jdk_image
+    build_ords_image
+    prepare_cdb_database
+    create_cdbs_pdbs_namespaces
+    create_cdb_secrets
+    create_certificates
+    create_cert_secrets
+    create_cdb
+    check_cdb)  
+  for function in "${function_list[@]}"; do
+    _call_and_name_function "$function"
+  done
 }
 
 all() {
-  step_create_infra
-  step_install_sidb
-  step_install_ords
+  local function_list=(step_create_infra
+    step_install_sidb
+    step_install_ords)
+  for function in "${function_list[@]}"; do
+    _call_and_name_function "$function"
+  done
 }
 
 main() {

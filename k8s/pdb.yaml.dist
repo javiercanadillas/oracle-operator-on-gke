@@ -1,0 +1,44 @@
+apiVersion: database.oracle.com/v1alpha1
+kind: PDB
+metadata:
+  name: pdb2
+  namespace: "$PDB_NAMESPACE"
+  labels:
+    cdb: cdb-dev
+spec:
+  cdbResName: "cdb-dev"
+  cdbNamespace: "$CDB_NAMESPACE"
+  cdbName: "$CDB_NAME"
+  pdbName: "FREEPDB2"
+  adminName:
+    secret:
+      secretName: "$PDB_SECRET"
+      key: "sysadmin_user"
+  adminPwd:
+    secret:
+      secretName: "$PDB_SECRET"
+      key: "sysadmin_pwd"
+  webServerUser: 
+    secret: 
+      secretName: "$PDB_SECRET"
+      key: "webserver_user"
+  webServerPwd: 
+    secret: 
+      secretName: "$PDB_SECRET"
+      key: "webserver_pwd"
+  fileNameConversions: "NONE"
+  totalSize: "1G"
+  tempSize: "100M"
+  action: "Create"
+  pdbTlsCat:
+    secret:
+      secretName: "db-ca"
+      key: "ca.crt"
+  pdbTlsCrt:
+    secret:
+      secretName: "db-tls"
+      key: "tls.crt"
+  pdbTlsKey:
+    secret:
+      secretName: "db-tls"
+      key: "tls.key"

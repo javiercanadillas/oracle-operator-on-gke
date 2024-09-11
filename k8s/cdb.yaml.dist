@@ -1,8 +1,8 @@
 apiVersion: database.oracle.com/v1alpha1
-kind: CDB 
-metadata: 
+kind: CDB
+metadata:
   name: cdb-dev
-  namespace: oracle-database-operator-system
+  namespace: $CDB_NAMESPACE
 spec:
   cdbName: "DB23ai"
   serviceName: "$CDB_NAME"
@@ -11,30 +11,30 @@ spec:
   dbServer:  $CDB_IP_ADDRESS
   dbPort: $CDB_PORT
   replicas: 1
-  sysAdminPwd: 
-    secret: 
+  sysAdminPwd:
+    secret:
       secretName: "$CDB_SECRET"
       key: "sysadmin_pwd"
   ordsPwd:
-    secret: 
+    secret:
       secretName: "$CDB_SECRET"
-      key: "ords_pwd"  
-  cdbAdminUser: 
-    secret: 
+      key: "ords_pwd"
+  cdbAdminUser:
+    secret:
       secretName: "$CDB_SECRET"
       key: "cdbadmin_user"
-  cdbAdminPwd: 
-    secret: 
+  cdbAdminPwd:
+    secret:
       secretName: "$CDB_SECRET"
       key: "cdbadmin_pwd"
-  webServerUser: 
-    secret: 
+  webServerUser:
+    secret:
       secretName: "$CDB_SECRET"
       key: "webserver_user"
-  webServerPwd: 
-    secret: 
+  webServerPwd:
+    secret:
       secretName: "$CDB_SECRET"
-      key: "webserver_pwd"      
+      key: "webserver_pwd"
   cdbTlsKey:
     secret:
       secretName: "db-tls"
