@@ -10,7 +10,7 @@ Because you can, it's _kind of_ fun, and it's a way to learn about other databas
 
 This tutorial will be deploying the Oracle Database Operator for Kubernetes on GKE. This operator is designed to simplify the deployment and management of Oracle Database instances on Kubernetes. It will work with the concept of _Multitenant_ databases, which is a feature of Oracle Database that allows you to have multiple databases within a single Oracle Database instance. This is a feature that is available in Oracle Database 12c and later versions.
 
-For multitenant databases, there are two key concepts that the Operator will be creating and managing for you when you later deploy a `Singleinstancedatabase` object in your GKE cluster:
+For multitenant databases, there are two key concepts to bear in mind that the Operator will be working with:
 
 - The _Container Database_ (CDB): it contains one or many _Pluggable Databases_ (PDBs). The CDB is a main multitenancy enabled database instance, and it functions as the foundation, housing system metadata and shared resources essential for managing all the PDBs it contains.
 - The _Pluggable Database_ (PDB): the PDBs are the individual databases that you can create within the CDB. It is essentially a portable collection of schemas, schema objects (like tables, views, etc.), and other database components, and acts like a self-contained database from an application's perspective, providing isolation and a dedicated environment.
@@ -19,20 +19,34 @@ So, the CDB acts as the foundation or container for the PDBs, where a single CDB
 
 This is important in this context as the long term goal would be to have PDBs acting as separate databases for different applications, and the CDB providing the shared services and infrastructure for all the PDBs, all part of a Kubernetes Platform deployed on GKE.
 
+The _Oracle Operator for Kubernetes_ allows you to connect to CDBs, that are no more than regular databases with multitenant capabilities. These databases can at the same time be created using the Oracle Operator inside Kubernetes, or they can be existing databases (inside or outside the Kubernetes world) that you want to manage using the Operator. The Operator also allows you to manage the lifecycle of PDBs inside the CDBs, like creating, deleting, or scaling them.
+
+## This setup
+
 In this tutorial you will be deploying a Single Instance Database through the Oracle Operator. What does this have to do with the CDB and PDBs? Well, **the Single Instance Database is a special case of a CDB with a single PDB**. This means that as soon as you've deployed it, you'll have a CDB with a single PDB, and you'll be able to connect to both the CDB and the PDB using standart Oracle Database tools like `sqlplus`.
 
-Now that this is more or less clear, let's move on to the steps to deploy the Oracle Operator on GKE.
+Once you've done that, you will proceed to creata a CDB kubernetes object to connect with the exiting CDB in the single instance database you've just deployed. That step will create in turn an Oracle service called ORDS (Oracle REST Data Services) that will allow you to connect to the CDB and PDBs using RESTful services. Each ORDS deployment is connected to a CDB, and will be used by the Oracle Operator to manage the lifecycle of the PDBs inside the CDB.
+
+With ORDS in place and connected to the CDB inside the SingleInstanceDatabase, the last step will be to create a PDB kubernetes object through the Oracle Operator that will create a Pluggable Database (PDB) inside the Containerize Database (CDB) that the SingleInstanceDatabase has. This PDB object creation points to the CDB object created before, and will be using ORDS to connect to the database where the operations must be performed. The Kubernetes Oracle Operator talks RESTful services to the ORDS service, which at the same time uses a JDBC driver to talk to the actual database.
+
+The diagram below depicts the logical relationship between the objects and services that will be created in this tutorial:
+
+<div style="text-align: center;">
+  <img src="./img/OOPGKE_Logical_Diagram.png" alt="Logical Diagram">
+</div>
+
+All required services and objects will use GCP infrastructure. More specifically, the Oracle Operator will be deployed on a GKE cluster, and the relevant container images will be built and stored in a Google Artifact Registry repository.
+
 
 ## Pre-requisites
 
 Here are the things you'll need to have in place before you can run the steps to install the Oracle Operator on GKE:
 
 - You'll need a GCP Project. Create it in your GCP environment.
-- You'll need a Mac or a Linux computer. If a Mac, you'll need to install Homebrew. If you're using Windows, I'd recommend you to use [Cloud Shell](https://cloud.google.com/shell/docs/launching-cloud-shell).
+- You'll need a Mac or a Linux computer. If a Mac, you'll need to install Homebrew. If you're using Windows, I'd recommend you to connect to a [Cloud Shell](https://cloud.google.com/shell/docs/launching-cloud-shell) from there.
 - You'll need to install the Google Cloud SDK.  You can find the instructions [here](https://cloud.google.com/sdk/docs/install).
 - You'll need to install kubectl.  You can find the instructions [here](https://kubernetes.io/docs/tasks/tools/install-kubectl/).
 
-Once this is done, edit the `env.sh` file and set the environment variables to match your setup. You will need at least to change the `PROJECT_ID` variable. You may also want to check the `DB_VERSION` value by visiting [the Oracle docker-images GitHub repo](https://github.com/oracle/docker-images/tree/main/OracleDatabase/SingleInstance/dockerfiles) and making sure there version used matches an existing directory there. You may leave the other variables as they are.
 
 Finally, you need to set and export the DB_PASSWORD environment variable. This is the password for the Oracle Database. You can do this by running the following command:
 
@@ -40,126 +54,169 @@ Finally, you need to set and export the DB_PASSWORD environment variable. This i
 export DB_PASSWORD=<your_password>
 ```
 
-## Installing the operator
+## Setting up the environment
 
-Use the [`steps.bash`](./steps.bash) script. The script accepts a single argument, the name of a script's function.  Every step in the Oracle Operator for Kubernetes has a corresponding function in the script.  The script will execute the function and print the output to the console.
+The following diagram shows what the environment will look like after you've completed all the steps in this tutorial:
 
-You can either launch a wrapper function called `all` to execute all the steps or call each function individually:
+<div style="text-align: center;">
+  <img src="./img/OOPGKE_Main_Diagram.png" alt="Logical Diagram">
+</div>
 
-```bash
-./steps.bash all
-```
+You may use it as a reference to understand the steps you'll be taking to set up the whole scenario.
 
-or you can call each function individually, for example the `check_prereqs` function:
+You will use the [`oopgke.bash`](./oopgke.bash) script to automate all set up steps involved in getting the scenario depicted above ready. The script accepts a single argument, the name of a script's function.  Every configuration step in this tutorial has a corresponding function in the script. In that sense, the script is a quite detailed guide on how to set up this whole scenario. I'd recommend you to read the script to understand what's going on in each step after you've completed the tutorial or while you're making progress through the above steps.
 
-```bash
-./steps.bash check_prereqs
-```
+### Step 1 - Creating the infrastructure
 
-I would recommend you the second option, as it will allow you to understand what each step is doing and correct any mistakes that may happen.
-
-### Running the steps
-
-1. Make sure you have performed the pre-requisites steps above.
-
-2. Set the GCP environment:
+First, make sure you have performed the pre-requisites steps above. Then, run the script with the following option:
 
 ```bash
-./steps.bash set_gcp_environment
+./oopgke.bash step1_create_infrastructure
 ```
 
-3. Enable the necessary APIs:
+This will:
 
-  ```bash
-  ./steps.bash enable_apis
-  ```
+- Set up the GCP environment for you according to the variables you've set in the `env.sh` file.
+- Enable the necessary APIs in your GCP project.
+-Create the GKE cluster with one starting node in the configured region where you'll be deploying the Oracle Operator.
+- Get the GKE credentials into your local kubeconfig file so you can interact with the cluster using `kubectl`:
+- Create the necessary Artifact Registry repository to host the Oracle Database image you'll be building later on.
 
-4. Create the GKE cluster with one starting node in the configured region where you'll be deploying the Oracle Operator:
+### Step 2 - Installing the Oracle Operator
 
-  ```bash
-  ./steps.bash create_gke_cluster
-  ```
+Once [Step 1](#step-1---creating-the-infrastructure) has been completed, run the script with the following option:
 
-5. Get the GKE credentials into your local kubeconfig file so you can interact with the cluster using `kubectl`:
+```bash
+./oopgke.bash step2_install_oracle_operator
+```
 
-  ```bash
-  ./steps.bash get_gke_credentials
-  ```
+This will:
 
-6. Install the required [Cert Manager](https://cert-manager.io/):
-  ```bash
-  ./steps.bash install_cert_manager
-  ```
+- Install Certificates Manager in the GKE cluster.
+- Install the `cmctl` tool in your local computer that will be used to check the proper installation of the Cert Manager.
+- Check the Cert Manager installation using the previously installed `cmctl` tool.
+- Deploy the Oracle Operator. This will use [the corresponding yaml](https://github.com/oracle/oracle-database-operator/blob/main/oracle-database-operator.yaml) file taken from the Oracle Database Operator GitHub repository
+- Configure the necessary roles bindings in the GKE cluster to allow the Oracle Operator to run.
 
-7. Install the `cmctl` tool in your local computer that will be used to check the proper installation of the Cert Manager:
-  
-  ```bash
-  ./steps.bash install_cmctl
-  ```
+After the script has completed, it will prompt you to check for proper deployment of the Oracle Operator Controller Manager pods by running:
 
-8. Check the Cert Manager installation using the previously installed `cmctl` tool:
+```bash
+./oopgke.bash check_oracle_operator
+```
 
-  ```bash
-  ./steps.bash check_cert_manager
-  ```
+Once the pods show up in a `Running` state, you can proceed to the next step.
 
-9. Now, deploy the Oracle Operator. This will use [the corresponding yaml](https://github.com/oracle/oracle-database-operator/blob/main/oracle-database-operator.yaml) file taken from the Oracle Database Operator GitHub repository. This step will also take care of configuring the necessary roles bindings:
+### Step 3 - Deploying the Single Instance Database
 
-  ```bash
-  ./steps.bash deploy_oracle_operator
-  ```
+Now that [Step 2](#step-2---installing-the-oracle-operator) has been completed, run the script with the following option:
 
-10. Check the Oracle Operator installation, by listing the pods in the `oracle-database-operator-syste` namespace:
+```bash
+./oopgke.bash step3_deploy_sidb
+```
 
-  ```bash
-  ./steps.bash check_oracle_operator
-  ```
+This will:
 
-11. Next would be builiding a container image for the database version and flavor you want to base your PDBs and CDBs on. For this, you first need to clone the `docker-images` GitHub repository containing the source to build Oracle Database Container Images, from where you can select the Oracle Database 23.4.0 free version that's going to be used for this tutorial. This step automates all this for you:
+- Get the source files for the Oracle Database image building process.
+- Build a container image for the database version and flavor you want to base your PDBs and CDBs on. By default, the script will build an Oracle Database 23ai free version image, that supports the multitenant features required for this tutorial.
+- Deploy a Single Instance Database using the Oracle Operator. This will create a `SingleInstanceDatabase` object in the Kubernetes cluster, and a `Secret` object that will store the password for the Oracle Database.
+- Check that the installation went well by querying the status of the `SingleInstanceDatabase` object.
+- Install the `sqlplus` tool required to test connectivity agains the PDB and CDB databases.
+- Use the `sqlplus` tool to connect to the Oracle Database and check that the connection is working.
 
-  ```bash
-  ./steps.bash get_oracle_docker_images
-  ```
-  
-12. You now need to create a Google Artifact Registry to host the Oracle Database image you're about to build:
+What you see after the database creation and connection testing are the connection strings for the CDB and PDB databases present in the Single Instance Database you've just deployed. Oracle 23DBai is free and allows for multitenant features, but it's limited to a single CDB. The CDB is the main database that contains the PDBs, and in this case, there's only one PDB in the CDB. In the next steps, you'll be creating a CDB object that will connect to this CDB, and then a PDB object that will create a new PDB inside the CDB.
 
-  ```bash
-  ./steps.bash create_gar_repo
-  ```
+If something went wrong in this step, check the logs of the `oracle-database-operator-controller-manager` pod in the `oracle-database-operator-system` namespace to trouebleshoot any possible issues.
 
-13. You have now all the building blocks in place to actually build an Oracle Database 23.4.0 free version image. This step will take some time to complete, and will use Cloud Build to build the image and publish it to the Google Artifact Registry repository that you've created before:
+### Step 4 - Creating the CDB object (and installing ORDS)
 
-  ```bash
-  ./steps.bash build_image
-  ```
+[Step 3](#step-3---deploying-the-single-instance-database) got the database that you need in place. It's now time to request a CDB creation object that will claim the existing CDB, run the script with the following option:
 
-14. Using the Oracle Operator, you will create a Single Instance Oracle Database from the image created above. For this, you will create a `SingleInstanceDatabase` object in the Kubernetes cluster using as template the [`singleinstancedatabase.yaml.dist`](./k8s/singleinstancedatabase.yaml.dist) file in this repo. This step will also create a `Secret` object that will store the password for the Oracle Database:
+```bash
+./oopgke.bash step4_create_cdb
+```
 
-  ```bash
-  ./steps.bash create_sidb
-  ```
-  
-15. Check that the installation went well by querying the status of the `SingleInstanceDatabase` object you created before:
+This will:
 
-  ```bash
-  ./steps.bash check_sidb
-  ```
-  
-16. Install the `sqlplus` tool that you'll be using to test connectivity agains the PDB and CDB databases:
+- Download the source for building the ORDS image.
+- Build the Oracle JDK 22 image that will be used as base image for the ORDS image.
+- Build the ORDS image that will be used to create an ORDS deployment once the CDB resource creation is requested to the Oracle Operator.
+- Prepare the existing CDB in the Single Instance Database so it can host `ORDS_PUBLIC_USER` schema required by ORDS. This involves creating an extensively authorized database user with the necessary permissions to edit and query Pluggable Databases.
+- Create the Kubernetes namespaces `oracle-cdbs` and `oracle-pdbs` to host the ORDS deployment, the CDB objects, and the PDB objects.
+- Create the certificates necessary for communication between the ORDS pod and the Oracle Operator.
+- Create the secrets required to store the ORDS database connection information, and the ones containing the certificates created before.
+- Create the CDB Kubernetes object that will connect to the existing CDB in the Single Instance Database.
 
-  ```bash
-  ./steps.bash install_sqlplus
-  ```
+Now wait some seconds for the ORDS pod to be created and run `./oopgke.bash check_cdb`, This command gets the logs of the ORDS container, so you can see how ORDS is bootstraping and connecting to the CDB. After successful completion, you should see a log similar to the one below:
 
-17. Use the `sqlplus` tool to connect to the Oracle Database:
+```text
+2024-09-12T15:46:58.245Z INFO        Oracle REST Data Services initialized
+Oracle REST Data Services version : 23.3.0.r2891830
+Oracle REST Data Services server info: jetty/10.0.17
+Oracle REST Data Services java info: Java HotSpot(TM) 64-Bit Server VM 22.0.2+9-70
+```
 
-  ```bash
-  ./steps.bash check_connection
-  ```
+Press `Ctrl+C` to stop the log output and carry on with the next step.
 
-You should be able to connect to both. If you can't, check the logs of the `oracle-database-operator-controller-manager` pod in the `oracle-database-operator-system` namespace to trouebleshoot any possible issues.
+### Step 5 - Creating the PDB object
 
-# Relevant links
+Now that the CDB object is in place and the ORDS service is running, you can create a PDB object that will create a new PDB inside the CDB. Run the script with the following option:
 
-- [Oracle Database Operator Usecase 01](https://github.com/oracle/oracle-database-operator/blob/main/docs/multitenant/usecase01/README.md)
+```bash
+./oopgke.bash step5_create_pdb
+```
+
+This will:
+
+- Create a Kubernetes secret that will store the password for the PDB that will be created.
+- Create the PDB Kubernetes object that will create a new PDB inside the CDB.
+
+After the PDB object is created, you can check the status of the PDB object by running:
+
+```bash
+./oopgke.bash check_pdb
+```
+
+This will show you the status of the PDB object, and you should see a log similar to the one below:
+
+```text
+Checking PDB...
+
+==================================================================
+
+CDB=cdb-dev
+K8SNAME=javiercm
+PDBNAME=JAVIERCM
+OPENMODE=READ WRITE
+ACTION=CREATE
+MSG=Success
+```
+
+Finally, connect to the Single Instance Database and check that the new PDB has been created. You can do this by running the following command:
+
+```bash
+./oopgke.bash check_pdb_databases
+```
+
+You should see a log similar to the one below:
+
+```text
+SQL> 
+    CON_ID CON_NAME                       OPEN MODE  RESTRICTED
+---------- ------------------------------ ---------- ----------
+         2 PDB$SEED                       READ ONLY  NO
+         3 FREEPDB1                       READ WRITE NO
+         4 JAVIERCM                       READ WRITE NO
+```
+
+## Cleanup
+
+To do a cleanup of the resources created in this tutorial, you can run the following command:
+
+```bash
+./oopgke.bash full_cleanup
+```
+
+## Relevant links
+
+- [Oracle Database Operator Usecase 03](https://github.com/oracle/oracle-database-operator/blob/main/docs/multitenant/usecase03/README.md)
 - [Oracle Database - Fit for Kubernetes](https://blogs.oracle.com/coretec/post/oracle-database-fit-for-kubernetes)

@@ -2,7 +2,7 @@
 # Description:    
 #                 
 # Prerequisites:  
-# (C) Javier Cañadillas - August 2024.
+# (C) Javier Cañadilla (javiercm@google.com) - September 2024.
 
 ## Prevent this script from being sourced
 #shellcheck disable=SC2317
@@ -10,6 +10,7 @@ return 0  2>/dev/null || :
 
 # Script-wide variables
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 source env.bash
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
@@ -96,6 +97,25 @@ enable_apis() {
     cloudbuild.googleapis.com
 }
 
+set_building_permissions() {
+  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+  SA_NAME="$PROJECT_NUMBER-compute"
+
+  echo "Setting up permissions..."
+  declare -a roles=(
+    "logging.logWriter"
+    "viewer"
+    "storage.objectViewer"
+    "artifactregistry.writer"
+  )
+
+  for role in "${roles[@]}"; do
+   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member serviceAccount:"${SA_NAME}@developer.gserviceaccount.com" \
+    --role "roles/$role"
+  done
+}
+
 create_cluster() {
   echo "Creating GKE cluster $CLUSTER_NAME..."
   echo "This process may take a while..."
@@ -116,6 +136,11 @@ create_cluster() {
 get_gke_credentials() {
   echo "Getting credentials for cluster $CLUSTER_NAME..."
   gcloud container clusters get-credentials "$CLUSTER_NAME" --region "$REGION"
+}
+
+create_gar_repo() {
+  echo "Creating GCR repository..."
+  gcloud artifacts repositories create "$REPO_NAME" --repository-format=docker --location="$REGION" --description="Oracle Database images"
 }
 
 install_cert_manager() {
@@ -170,38 +195,9 @@ check_operator() {
   kubectl get pods --namespace "$OPERATOR_NAMESPACE"
 }
 
-check_sidbs() {
-  echo "Checking Oracle Database..."
-  kubectl get singleinstancedatabases -o name
-}
-
-create_gar_repo() {
-  echo "Creating GCR repository..."
-  gcloud artifacts repositories create "$REPO_NAME" --repository-format=docker --location="$REGION" --description="Oracle Database images"
-}
-
 get_oracle_docker_images() {
   echo "Downloading Oracle Database images..."
   [[ ! -d "docker-images" ]] && git clone "https://github.com/oracle/docker-images.git"
-}
-
-set_building_permissions() {
-  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-  SA_NAME="$PROJECT_NUMBER-compute"
-
-  echo "Setting up permissions..."
-  declare -a roles=(
-    "logging.logWriter"
-    "viewer"
-    "storage.objectViewer"
-    "artifactregistry.writer"
-  )
-
-  for role in "${roles[@]}"; do
-   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member serviceAccount:"${SA_NAME}@developer.gserviceaccount.com" \
-    --role "roles/$role"
-  done
 }
 
 build_sidb_image() {
@@ -223,6 +219,11 @@ create_sidb() {
   export db_pass_encoded
   envsubst < k8s/singleinstancedatabase.yaml.dist > "k8s/singleinstancedatabase.yaml"
   kubectl apply -f "k8s/singleinstancedatabase.yaml"
+}
+
+check_sidbs() {
+  echo "Checking Oracle Database..."
+  kubectl get singleinstancedatabases -o name
 }
 
 check_sidb() {
@@ -517,6 +518,28 @@ check_pdb() {
 {"\n"}{end}'
 }
 
+check_pdb_databases() {
+  echo "Checking PDB databases..."
+  _get_db_creds hide
+  echo "Connecting to the CDB... (press Ctrl-C to exit)"
+  case $OSTYPE in
+    darwin*)
+      sqlplus "sys/$DB_PASSWORD@$CDB_CONN_STRING" as sysdba<<EOF
+show pdbs
+EOF
+      ;;
+    linux*)
+      usql "oracle://sys:$DB_PASSWORD@$CDB_CONN_STRING" <<EOF
+show pdbs
+EOF
+      ;;
+    *?)
+      echo "Unsupported OS. Exiting."
+      exit 1
+      ;;
+  esac
+}
+
 cleanup_gke() {
   echo "Cleaning up GKE resources..."
   gcloud container clusters delete "$CLUSTER_NAME" --region "$REGION" --quiet
@@ -537,52 +560,58 @@ cleanup_local_data() {
   rm -rf "$SCRIPT_DIR"/certs
 }
 
-_call_and_name_function() {
-  local function_name="$1" && shift
-  echo "Calling function $function_name..."
-  "$function_name"
-}
-
-full_cleanup() {
-  local function_list=(cleanup_gke
-    cleanup_ar
-    cleanup_local_data)
+_call_functions() {
+  local function_list=("$@")
   for function in "${function_list[@]}"; do
-    _call_and_name_function "$function"
+    echo "Calling function $function..."
+    "$function"
   done
 }
 
-step_create_infra() {
-  local function_list=(set_gcp_environment
+full_cleanup() {
+  local function_list=(
+    cleanup_gke
+    cleanup_ar
+    cleanup_local_data)
+  _call_functions "${function_list[@]}"
+}
+
+step1_create_infra() {
+  local function_list=(
+    set_gcp_environment
     enable_apis
+    set_building_permissions
     create_cluster
     get_gke_credentials
+    create_gar_repo)
+  _call_functions "${function_list[@]}"    
+}
+
+step2_create_operator() {
+  local function_list=(
     install_cert_manager
     install_cmctl
     check_cert_manager
-    deploy_operator
-    check_operator
-    create_gar_repo
-    get_oracle_docker_images
-    set_building_permissions)
-  for function in "${function_list[@]}"; do
-    _call_and_name_function "$function"
-  done    
+    deploy_operator)
+  _call_functions "${function_list[@]}"
+  echo "Now run $SCRIPT_NAME check_operator to check the operator status. Do not proceed with the next step
+  until the all the pods show up in a \"Running\" state."
 }
 
-step_install_sidb() {
-  local function_list=(build_sidb_image
+step3_install_sidb() {
+  local function_list=(
+    get_oracle_docker_images
+    build_sidb_image
     create_sidb
     check_sidb
     install_sqlplus
     check_connection)
-  for function in "${function_list[@]}"; do
-    _call_and_name_function "$function"
-  done
+  _call_functions "${function_list[@]}"
 }
 
-step_install_ords() {
-  local function_list=(download_ords_images
+step4_install_ords() {
+  local function_list=(
+    download_ords_images
     build_jdk_image
     build_ords_image
     prepare_cdb_database
@@ -590,20 +619,25 @@ step_install_ords() {
     create_cdb_secrets
     create_certificates
     create_cert_secrets
-    create_cdb
-    check_cdb)  
-  for function in "${function_list[@]}"; do
-    _call_and_name_function "$function"
-  done
+    create_cdb)
+  _call_functions "${function_list[@]}"
+  echo "Now run $SCRIPT_NAME check_cdb to check connect to the ORDS container inside the ORDS pod for logs."
 }
 
-all() {
-  local function_list=(step_create_infra
-    step_install_sidb
-    step_install_ords)
-  for function in "${function_list[@]}"; do
-    _call_and_name_function "$function"
-  done
+step5_install_pdb() {
+  local function_list=(
+    create_pdb_secret
+    create_pdb)
+  _call_functions "${function_list[@]}"
+}
+
+all_steps() {
+  local function_list=(
+    step1_create_infra
+    step2_create_operator
+    step3_install_sidb
+    step4_install_ords)
+  _call_functions "${function_list[@]}"
 }
 
 main() {

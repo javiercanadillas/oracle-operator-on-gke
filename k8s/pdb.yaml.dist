@@ -1,7 +1,7 @@
 apiVersion: database.oracle.com/v1alpha1
 kind: PDB
 metadata:
-  name: pdb2
+  name: javiercm
   namespace: "$PDB_NAMESPACE"
   labels:
     cdb: cdb-dev
@@ -9,7 +9,7 @@ spec:
   cdbResName: "cdb-dev"
   cdbNamespace: "$CDB_NAMESPACE"
   cdbName: "$CDB_NAME"
-  pdbName: "FREEPDB2"
+  pdbName: "JAVIERCM"
   adminName:
     secret:
       secretName: "$PDB_SECRET"
