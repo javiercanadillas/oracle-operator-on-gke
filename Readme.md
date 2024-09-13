@@ -29,7 +29,7 @@ Once you've done that, you will proceed to creata a CDB kubernetes object to con
 
 With ORDS in place and connected to the CDB inside the SingleInstanceDatabase, the last step will be to create a PDB kubernetes object through the Oracle Operator that will create a Pluggable Database (PDB) inside the Containerize Database (CDB) that the SingleInstanceDatabase has. This PDB object creation points to the CDB object created before, and will be using ORDS to connect to the database where the operations must be performed. The Kubernetes Oracle Operator talks RESTful services to the ORDS service, which at the same time uses a JDBC driver to talk to the actual database.
 
-The diagram below depicts the logical relationship between the objects and services that will be created in this tutorial:
+The diagram below depicts the logical relationship between the objects and services that will be created in this tutorial (color conventions, blue for the sidb, orange for the cdb, and yellow for the pdb are important to follow the relationships):
 
 <div style="text-align: center;">
   <img src="./img/OOPGKE_Logical_Diagram.png" alt="Logical Diagram">
