@@ -90,12 +90,16 @@ Once [Step 1](#step-1---creating-the-infrastructure) has been completed, run the
 ./oopgke.bash step2_install_oracle_operator
 ```
 
+<div style="text-align: center;">
+  <img src="./img/OOPGKE_Create_Operator.png" alt="Create Oracle Operator">
+</div>
+
 This will:
 
-- Install Certificates Manager in the GKE cluster.
+- **Steps 1 and 2**: Install Certificates Manager in the GKE cluster.
 - Install the `cmctl` tool in your local computer that will be used to check the proper installation of the Cert Manager.
 - Check the Cert Manager installation using the previously installed `cmctl` tool.
-- Deploy the Oracle Operator. This will use [the corresponding yaml](https://github.com/oracle/oracle-database-operator/blob/main/oracle-database-operator.yaml) file taken from the Oracle Database Operator GitHub repository
+- **Steps 3 and 4**: Deploy the Oracle Operator. This will use [the corresponding yaml](https://github.com/oracle/oracle-database-operator/blob/main/oracle-database-operator.yaml) file taken from the Oracle Database Operator GitHub repository
 - Configure the necessary roles bindings in the GKE cluster to allow the Oracle Operator to run.
 
 After the script has completed, it will prompt you to check for proper deployment of the Oracle Operator Controller Manager pods by running:
@@ -114,11 +118,16 @@ Now that [Step 2](#step-2---installing-the-oracle-operator) has been completed, 
 ./oopgke.bash step3_deploy_sidb
 ```
 
+<div style="text-align: center;">
+  <img src="./img/OOPGKE_Create_SIDB.png" alt="Create a Single Instance Database">
+</div>
+
 This will:
 
 - Get the source files for the Oracle Database image building process.
-- Build a container image for the database version and flavor you want to base your PDBs and CDBs on. By default, the script will build an Oracle Database 23ai free version image, that supports the multitenant features required for this tutorial.
-- Deploy a Single Instance Database using the Oracle Operator. This will create a `SingleInstanceDatabase` object in the Kubernetes cluster, and a `Secret` object that will store the password for the Oracle Database.
+- **Step 1**: Build a container image for the database version and flavor you want to base your PDBs and CDBs on. By default, the script will build an Oracle Database 23ai free version image, that supports the multitenant features required for this tutorial. Push that image into an Artifact Registry repository.
+- **Step 2**: Deploy a Single Instance Database object using the Oracle Operator. This will create a `SingleInstanceDatabase` object in the Kubernetes cluster, and a `Secret` object that will store the password for the Oracle Database. The Single Instance Database already contains a CDB with a single PDB (**Step 3**)
+- **Step 4**: Create a Kubernetes LoadBalancer service that will expose the Single Instance Database to the outside world. This will allow you to connect to the database using the Oracle Database tools like `sqlplus`.
 - Check that the installation went well by querying the status of the `SingleInstanceDatabase` object.
 - Install the `sqlplus` tool required to test connectivity agains the PDB and CDB databases.
 - Use the `sqlplus` tool to connect to the Oracle Database and check that the connection is working.
@@ -135,16 +144,19 @@ If something went wrong in this step, check the logs of the `oracle-database-ope
 ./oopgke.bash step4_create_cdb
 ```
 
+<div style="text-align: center;">
+  <img src="./img/OOPGKE_Create_CDB.png" alt="Create ORDS and a CDB object">
+</div>
+
 This will:
 
 - Download the source for building the ORDS image.
-- Build the Oracle JDK 22 image that will be used as base image for the ORDS image.
-- Build the ORDS image that will be used to create an ORDS deployment once the CDB resource creation is requested to the Oracle Operator.
-- Prepare the existing CDB in the Single Instance Database so it can host `ORDS_PUBLIC_USER` schema required by ORDS. This involves creating an extensively authorized database user with the necessary permissions to edit and query Pluggable Databases.
-- Create the Kubernetes namespaces `oracle-cdbs` and `oracle-pdbs` to host the ORDS deployment, the CDB objects, and the PDB objects.
-- Create the certificates necessary for communication between the ORDS pod and the Oracle Operator.
-- Create the secrets required to store the ORDS database connection information, and the ones containing the certificates created before.
-- Create the CDB Kubernetes object that will connect to the existing CDB in the Single Instance Database.
+- **Step 1**: Build the Oracle JDK 22 image that will be used as base image for the ORDS image.Also, it will build the ORDS image that will be used to create an ORDS deployment once the CDB resource creation is requested to the Oracle Operator.
+- **Step 2**: Prepare the existing CDB in the Single Instance Database so it can host `ORDS_PUBLIC_USER` schema required by ORDS. This involves creating an extensively authorized database user with the necessary permissions to edit and query Pluggable Databases using some SQL commands.
+- **Step 3**: Create the Kubernetes namespaces `oracle-cdbs` and `oracle-pdbs` to host the ORDS deployment, the CDB objects, and the PDB objects.
+- Create the certificates necessary for communication between the ORDS pod and the Oracle Operator. This secrets will be replicated across the namespaces created before.
+- **Step 4**: Create the secrets required to store the ORDS database connection information, and the ones containing the certificates created before.
+- **Step 5:**: Create the CDB Kubernetes object that will connect to the existing CDB in the Single Instance Database.
 
 Now wait some seconds for the ORDS pod to be created and run `./oopgke.bash check_cdb`, This command gets the logs of the ORDS container, so you can see how ORDS is bootstraping and connecting to the CDB. After successful completion, you should see a log similar to the one below:
 
