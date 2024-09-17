@@ -1,5 +1,7 @@
 # Deploying the Oracle Operator on GKE
 
+This repo has been created in collaboration with [Darren Evans (@dazdaz)](https://github.com/dazdaz).
+
 ## Why?
 
 Because you can, it's _kind of_ fun, and it's a way to learn about other database options for GCP and Kubernetes.
@@ -23,9 +25,9 @@ The _Oracle Operator for Kubernetes_ allows you to connect to CDBs, that are no 
 
 ## This setup
 
-In this tutorial you will be deploying a Single Instance Database through the Oracle Operator. What does this have to do with the CDB and PDBs? Well, **the Single Instance Database is a special case of a CDB with a single PDB**. This means that as soon as you've deployed it, you'll have a CDB with a single PDB, and you'll be able to connect to both the CDB and the PDB using standart Oracle Database tools like `sqlplus`.
+In this tutorial you will be deploying a Single Instance Database through the Oracle Operator. What does this have to do with the CDB and PDBs? Well, **the Single Instance Database is a special case of a CDB with a single PDB**. This means that as soon as you've deployed it, you'll have a CDB with a single PDB, and you'll be able to connect to both the CDB and the PDB using standart Oracle Database tools like `sqlplus`, and also create more PDBs associated withe single CDB the database already has.
 
-Once you've done that, you will proceed to creata a CDB kubernetes object to connect with the exiting CDB in the single instance database you've just deployed. That step will create in turn an Oracle service called ORDS (Oracle REST Data Services) that will allow you to connect to the CDB and PDBs using RESTful services. Each ORDS deployment is connected to a CDB, and will be used by the Oracle Operator to manage the lifecycle of the PDBs inside the CDB.
+Once you've done that, you will proceed to creata a CDB kubernetes object to connect with the exiting CDB in the single instance database you've just deployed. That step will create in turn an Oracle service called ORDS (Oracle REST Data Services) that will allow you to connect to the CDB and PDBs using RESTful services. Each CDB will require an ORDS deployment that is connected to it, and will be used by the Oracle Operator to manage the lifecycle of the PDBs inside the CDB.
 
 With ORDS in place and connected to the CDB inside the SingleInstanceDatabase, the last step will be to create a PDB kubernetes object through the Oracle Operator that will create a Pluggable Database (PDB) inside the Containerize Database (CDB) that the SingleInstanceDatabase has. This PDB object creation points to the CDB object created before, and will be using ORDS to connect to the database where the operations must be performed. The Kubernetes Oracle Operator talks RESTful services to the ORDS service, which at the same time uses a JDBC driver to talk to the actual database.
 
@@ -36,7 +38,6 @@ The diagram below depicts the logical relationship between the objects and servi
 </div>
 
 All required services and objects will use GCP infrastructure. More specifically, the Oracle Operator will be deployed on a GKE cluster, and the relevant container images will be built and stored in a Google Artifact Registry repository.
-
 
 ## Pre-requisites
 
