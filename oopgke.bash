@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Description:    
-#                 
-# Prerequisites:  
-# (C) Javier Cañadilla (javiercm@google.com) - September 2024.
+# Description:
+#
+# Prerequisites:
+# Read https://github.com/javiercanadillas/oracle-operator-on-gke/blob/main/Readme.md#pre-requisites
+# (C) Javier Cañadillas(javiercm@google.com) - September 2024.
 
 ## Prevent this script from being sourced
 #shellcheck disable=SC2317
@@ -12,29 +13,13 @@ return 0  2>/dev/null || :
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 source env.bash
+source "$SCRIPT_DIR/lib/support.bash"
+
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
   ARCH="amd64"
 fi
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-
-_check_install_tap() {
-  local tap_name="$1" && shift
-  if brew tap | grep -i "$tap_name" 1>/dev/null; then
-    echo "Tap $tap_name is already installed."
-  else
-    brew tap "$tap_name"
-  fi  
-}
-
-_check_install_brew() {
-  brew_formula="$1" && shift
-  if brew list | grep -i "$brew_formula" 1>/dev/null; then
-    echo "Formula $brew_formula is already installed."
-  else
-    brew install "$brew_formula"
-  fi
-}
 
 _check_prereqs() {
   [[ $DB_PASSWORD ]] || {
@@ -64,16 +49,6 @@ _check_prereqs() {
     echo "kubectl could not be found. Exiting."
     exit 1
   }
-}
-
-_get_db_creds() {
-  local display=$1 && shift
-  CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
-  PDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.pdbConnectString}")"
-  if [[ "$display" == "display" ]]; then
-    echo "CDB connection string: $CDB_CONN_STRING"
-    echo "PDB connection string: $PDB_CONN_STRING"
-  fi
 }
 
 _set_environment() {
@@ -144,27 +119,33 @@ create_gar_repo() {
 }
 
 install_cert_manager() {
-  # @TODO Explore using Google-managed certificates: https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
-  local cmversion="v1.5.3"
   # https://cert-manager.io/docs/installation/kubectl/
   echo "Installing cert-manager..."
   # https://cert-manager.io/docs/reference/cmctl/#installation
-  kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${cmversion}/cert-manager.yaml" || {
-    echo "Could not install cmctl. Exiting."
-    exit 1
-  }
+  local remote_files
+  IFS="," read -r -a remote_files <<< "${yaml_files["cm"]}"
+  local dest_file="${remote_files[0]}"
+  _get_remote_file "${remote_files[@]}"
+  _apply_yaml_file "$dest_file"
 }
 
 install_cmctl() {
-  echo "Installing cmctl..."
+  local tool="cmctl"
+  echo "Installing $tool..."
   case $OSTYPE in
     darwin*)
-      _check_install_brew cmctl
+      _check_install_brew "$tool"
       ;;
     linux*)
-      curl -fsSL -o cmctl "https://github.com/cert-manager/cmctl/releases/latest/download/cmctl_${OS}_${ARCH}"
-      chmod +x cmctl
-      sudo mv cmctl /usr/local/bin
+      pushd "$(mktemp -d)" > /dev/null 2>&1 || exit
+      local remote_files
+      remote_files=(
+        "$tool"
+        "${non_yaml_files["$tool"]}"
+      )
+      local dest_file="${remote_files[0]}"
+      _get_remote_file "${remote_files[@]}"
+      sudo install "$dest_file" /usr/local/bin
       ;;
     *?)
       echo "Unsupported OS"
@@ -182,12 +163,19 @@ check_cert_manager() {
 
 deploy_operator () {
   # https://github.com/oracle/oracle-database-operator/blob/main/README.md#create-role-bindings-for-access-management
-  echo "Granting serviceaccount:oracle-database-operator-system:default cluster wide permissions..."
-  kubectl apply -f https://raw.githubusercontent.com/oracle/oracle-database-operator/main/rbac/cluster-role-binding.yaml
   echo "Deploying Oracle Database Operator..."
-  kubectl apply -f https://raw.githubusercontent.com/oracle/oracle-database-operator/main/oracle-database-operator.yaml
-  echo "Applying Node RBAC..."
-  kubectl apply -f https://raw.githubusercontent.com/oracle/oracle-database-operator/main/rbac/node-rbac.yaml
+  local op_files=(
+    "op_rb"
+    "op_yaml"
+    "op_nr"
+  )
+  for op_file in "${op_files[@]}"; do
+    local remote_files
+    IFS="," read -r -a remote_files <<< "${yaml_files["$op_file"]}"
+    local dest_file="${remote_files[0]}"
+    _get_remote_file "${remote_files[@]}"
+    _apply_yaml_file "$dest_file"
+  done
 }
 
 check_operator() {
@@ -215,10 +203,9 @@ build_sidb_image() {
 
 create_sidb() {
   echo "Creating Oracle Database..."
-  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64)
-  export db_pass_encoded
-  envsubst < k8s/singleinstancedatabase.yaml.dist > "k8s/singleinstancedatabase.yaml"
-  kubectl apply -f "k8s/singleinstancedatabase.yaml"
+  _encode_secrets
+  local dist_file="${dist_files["sidb"]}"
+  _apply_dist_file "$dist_file"
 }
 
 check_sidbs() {
@@ -231,15 +218,10 @@ check_sidb() {
   echo "This process may take a while..."
   local status
   while [[ "$status" != "Healthy" ]]; do
-    status="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.status}")"
+    status="$(kubectl get singleinstancedatabase "$SIDB_NAME" -o "jsonpath={.status.status}")"
     echo "Status: $status"
     sleep 2
   done
-}
-
-_wait_for_sidb() {
-  echo "Waiting for Oracle Database..."
-  kubectl wait --for=jsonpath='{.status.status}'=Healthy singleinstancedatabase/sidb-sample
 }
 
 install_sqlplus() {
@@ -251,10 +233,18 @@ install_sqlplus() {
       _check_install_brew instantclient-sqlplus
       ;;
     linux*)
+      local tool="usql"
       push "$(mktemp -d)" > /dev/null 2>&1 || exit
-      curl -fsSL "https://github.com/xo/usql/releases/download/v0.19.3/usql-0.19.3-linux-amd64.tar.bz2"
-      tar -xvf "usql-0.19.3-linux-amd64.tar.bz2"
-      sudo install usql /usr/local/bin
+      local downloaded_file="${tool}.tar.bz2"
+      local remote_files
+      remote_files=(
+        "$downloaded_file"
+        "${non_yaml_files["$tool"]}"
+      )
+      local dest_file="${remote_files[0]}"
+      _get_remote_file "${remote_files[@]}"
+      tar -xvf "$downloaded_file"
+      sudo install "$dest_file" /usr/local/bin
       popd > /dev/null 2>&1 || exit
       ;;
     *?)
@@ -377,38 +367,19 @@ prepare_cdb_database() {
 
 create_cdbs_pdbs_namespaces() {
   echo "Creating namespace for CDB..."
-  local namespaces=("$CDB_NAMESPACE" "$PDB_NAMESPACE")
-  for namespace in "${namespaces[@]}"; do
-    kubectl create namespace "$namespace"
-  done
+  local dist_file="${dist_files["namespaces"]}" 
+  _apply_dist_file "$dist_file"
 }
 
 create_cdb_secrets() {
   echo "Encoding secrets for CDB..."
-  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64)
-  export db_pass_encoded
-  cdbadmin_user_encoded=$(echo -n "$CDB_ADMIN_USER" | base64)
-  export cdbadmin_user_encoded
-  webserver_user_encoded=$(echo -n "$WEBSERVER_USER" | base64)
-  export webserver_user_encoded
-  envsubst < "$SCRIPT_DIR/k8s/cdb-secrets.yaml.dist" > "$SCRIPT_DIR/k8s/cdb-secrets.yaml"
-  echo "Creating secrets for CDB..."
-  kubectl apply -f "$SCRIPT_DIR/k8s/cdb-secrets.yaml"
-}
-
-_setup_certs_vars() {
-  tls_key=tls.key
-  tls_crt=tls.crt
-  ca_key=ca.key
-  ca_crt=ca.crt
-  server_csr=server.csr
-  company=google
-  rest_server=ords
+  encode_secrets
+  local dist_file="${dist_files["cdb-secrets"]}"
+  _apply_dist_file "$dist_file"
 }
 
 create_certificates() {
   echo "Creating certificates..."
-  _setup_certs_vars
 
   command -v openssl &> /dev/null || {
     echo "openssl could not be found. Exiting."
@@ -465,19 +436,11 @@ create_cert_secrets() {
   popd > /dev/null 2>&1 || exit
 }
 
-_get_cdb_details() {
-  CDB_CONN_STRING="$(kubectl get singleinstancedatabase sidb-sample -o "jsonpath={.status.connectString}")"
-  CDB_IP_ADDRESS=$(echo "$CDB_CONN_STRING" | cut -d':' -f1) && export CDB_IP_ADDRESS
-  CDB_PORT=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f1) && export CDB_PORT
-  CDB_NAME=$(echo "$CDB_CONN_STRING" | cut -d':' -f2 | cut -d'/' -f2) && export CDB_NAME
-}
-
 create_cdb() {
   echo "Preparing CDB YAML..."
   _get_cdb_details
-  envsubst < "$SCRIPT_DIR/k8s/cdb.yaml.dist" > "$SCRIPT_DIR/k8s/cdb.yaml"
-  echo "Applying CDB YAML..."
-  kubectl apply -f "$SCRIPT_DIR/k8s/cdb.yaml"
+  local dist_file="${dist_files["cdb"]}" 
+  _apply_dist_file "$dist_file"
 }
 
 check_cdb() {
@@ -488,21 +451,16 @@ check_cdb() {
 
 create_pdb_secret() {
   echo "Preparing PDB secret YAML file..."
-  db_pass_encoded=$(echo -n "$DB_PASSWORD" | base64) && export db_pass_encoded
-  sysadmin_user_encoded=$(echo -n "$PDB_SYSADMIN_USER" | base64) && export sysadmin_user_encoded
-  webserver_user_encoded=$(echo -n "$WEBSERVER_USER" | base64) && export webserver_user_encoded
-  envsubst < "$SCRIPT_DIR/k8s/pdb-secrets.yaml.dist" > "$SCRIPT_DIR/k8s/pdb-secrets.yaml"
-  echo "Creating PDB secret..."
-  kubectl delete secret pdb-secret -n "$PDB_NAMESPACE" 2>/dev/null
-  kubectl apply -f "$SCRIPT_DIR/k8s/pdb-secrets.yaml"
+  _encode_secrets
+  local dist_file="${dist_files["pdb-secrets"]}" 
+  _apply_dist_file "$dist_file"
 }
 
 create_pdb() {
   echo "Preparing PDB YAML file..."
   _get_cdb_details
-  envsubst < "$SCRIPT_DIR/k8s/pdb.yaml.dist" > "$SCRIPT_DIR/k8s/pdb.yaml"
-  echo "Creating PDB..."
-  kubectl apply -f "$SCRIPT_DIR/k8s/pdb.yaml"
+  local dist_file="${dist_files["pdb"]}" 
+  _apply_dist_file "$dist_file"
 }
 
 check_pdb() {
@@ -540,6 +498,12 @@ EOF
   esac
 }
 
+render_dist_yamls() {
+  echo "Rendering dist YAMLs..."
+  _encode_secrets
+  kubectl kustomize "$SCRIPT_DIR/$KUSTOMIZE_DIR" | envsubst | tee "$SCRIPT_DIR/$K8S_DIR"/all.yaml
+}
+
 cleanup_gke() {
   echo "Cleaning up GKE resources..."
   gcloud container clusters delete "$CLUSTER_NAME" --region "$REGION" --quiet
@@ -555,7 +519,7 @@ cleanup_local_data() {
   rm -rf "$SCRIPT_DIR/images"
   rm -rf "$SCRIPT_DIR/docker-images"
   rm -rf "$SCRIPT_DIR/oracle-database-operator"
-  rm -rf "$SCRIPT_DIR"/k8s/*.yaml
+  rm -rf "$SCRIPT_DIR/$K8S_DIR"/*.yaml
   rm -rf "$SCRIPT_DIR"/*.sql
   rm -rf "$SCRIPT_DIR"/certs
 }
@@ -587,7 +551,7 @@ step1_create_infra() {
   _call_functions "${function_list[@]}"    
 }
 
-step2_create_operator() {
+step2_install_oracle_operator() {
   local function_list=(
     install_cert_manager
     install_cmctl
@@ -644,6 +608,7 @@ main() {
   if declare -f "$1" > /dev/null; then
     _set_environment
     _check_prereqs
+    _define_files
     "$1"
   else
     echo "Function \"$1\" not found. You need to provide a valid function name present in the script."

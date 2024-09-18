@@ -10,7 +10,7 @@ metadata:
 apiVersion: database.oracle.com/v1alpha1
 kind: SingleInstanceDatabase
 metadata:
-  name: sidb-sample
+  name: $SIDB_NAME
   namespace: default
 spec:
   sid: FREE 

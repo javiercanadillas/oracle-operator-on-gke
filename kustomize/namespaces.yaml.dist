@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $CDB_NAMESPACE
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $PDB_NAMESPACE
