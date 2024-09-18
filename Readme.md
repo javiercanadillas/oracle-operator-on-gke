@@ -233,3 +233,11 @@ To do a cleanup of the resources created in this tutorial, you can run the follo
 
 - [Oracle Database Operator Usecase 03](https://github.com/oracle/oracle-database-operator/blob/main/docs/multitenant/usecase03/README.md)
 - [Oracle Database - Fit for Kubernetes](https://blogs.oracle.com/coretec/post/oracle-database-fit-for-kubernetes)
+
+## License
+
+All solutions within this repository are provided under the Apache 2.0 license. Please see the LICENSE file for more detailed terms and conditions.
+
+## Disclaimer
+
+This repository and its contents are not an official Google product.
