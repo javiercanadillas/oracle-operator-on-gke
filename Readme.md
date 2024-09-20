@@ -143,7 +143,7 @@ If something went wrong in this step, check the logs of the `oracle-database-ope
 [Step 3](#step-3---deploying-the-single-instance-database) got the database that you need in place. It's now time to request a CDB creation object that will claim the existing CDB, run the script with the following option:
 
 ```bash
-./oopgke.bash step4_create_cdb
+./oopgke.bash step4_create_cdb_ords
 ```
 
 <div style="text-align: center;">

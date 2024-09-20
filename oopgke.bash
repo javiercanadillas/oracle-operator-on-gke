@@ -573,7 +573,7 @@ step3_install_sidb() {
   _call_functions "${function_list[@]}"
 }
 
-step4_install_ords() {
+step4_create_cdb_ords() {
   local function_list=(
     download_ords_images
     build_jdk_image
@@ -588,7 +588,7 @@ step4_install_ords() {
   echo "Now run $SCRIPT_NAME check_cdb to check connect to the ORDS container inside the ORDS pod for logs."
 }
 
-step5_install_pdb() {
+step5_create_pdb() {
   local function_list=(
     create_pdb_secret
     create_pdb)
