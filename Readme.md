@@ -72,7 +72,7 @@ You will use the [`oopgke.bash`](./oopgke.bash) script to automate all set up st
 First, make sure you have performed the pre-requisites steps above. Then, run the script with the following option:
 
 ```bash
-./oopgke.bash step1_create_infrastructure
+./oopgke.bash step1_create_infra
 ```
 
 This will:
