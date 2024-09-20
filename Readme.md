@@ -48,6 +48,7 @@ Here are the things you'll need to have in place before you can run the steps to
 - You'll need to install the Google Cloud SDK.  You can find the instructions [here](https://cloud.google.com/sdk/docs/install).
 - You'll need to install kubectl.  You can find the instructions [here](https://kubernetes.io/docs/tasks/tools/install-kubectl/).
 
+You'll also need to adjust the `env.bash` based on your specific configuration. The `PROJECT_ID` variable should be the one to change, and maybe the `REGION` and `ZONE_1` and `ZONE_2` ones. The rest can be left as they are, unless you have specific requirements to satisfy.
 
 Finally, you need to set and export the DB_PASSWORD environment variable. This is the password for the Oracle Database. You can do this by running the following command:
 
