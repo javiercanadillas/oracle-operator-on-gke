@@ -117,7 +117,7 @@ Once the pods show up in a `Running` state, you can proceed to the next step.
 Now that [Step 2](#step-2---installing-the-oracle-operator) has been completed, run the script with the following option:
 
 ```bash
-./oopgke.bash step3_deploy_sidb
+./oopgke.bash step3_install_sidb
 ```
 
 <div style="text-align: center;">
