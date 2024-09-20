@@ -107,7 +107,7 @@ This will:
 After the script has completed, it will prompt you to check for proper deployment of the Oracle Operator Controller Manager pods by running:
 
 ```bash
-./oopgke.bash check_oracle_operator
+./oopgke.bash check_operator
 ```
 
 Once the pods show up in a `Running` state, you can proceed to the next step.
