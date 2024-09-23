@@ -373,7 +373,7 @@ create_cdbs_pdbs_namespaces() {
 
 create_cdb_secrets() {
   echo "Encoding secrets for CDB..."
-  encode_secrets
+  _encode_secrets
   local dist_file="${dist_files["cdb-secrets"]}"
   _apply_dist_file "$dist_file"
 }
