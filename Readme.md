@@ -222,6 +222,17 @@ SQL>
          4 JAVIERCM                       READ WRITE NO
 ```
 
+## Rendering the yaml files
+
+This is an optional step, best done before starting with this tutorial.If you prefer not to go through the tutorial and just inspect the Kubernetes manifests to be used in this tutorial, just run the following:
+
+```bash
+export DB_PASSWORD=<any-password-would-do>
+./oopgke.bash render_dist_yamls
+```
+
+This will render the corresponding manifests for the SIDB, CDB and PDB into the `k8s/` folder.
+
 ## Cleanup
 
 To do a cleanup of the resources created in this tutorial, you can run the following command:
